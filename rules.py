@@ -1,74 +1,89 @@
-def evaluate_hazard_rules(hazard_type, age, mobility, battery_level, offline_mode, language):
-    """
-    Universal Rule-Based Decision Engine:
-    Evaluates profile traits (Age, Mobility, Battery) against 7 distinct disaster categories.
-    """
-    steps = []
-    warnings = []
+import math
 
-    # 1. FLOOD
-    if "Flood" in hazard_type:
-        if age >= 60 or mobility != "Normal":
-            steps.append("Move toward designated higher ground at a slow, steady pace.")
-            steps.append("Follow wheelchair/accessible evacuation paths provided on the map.")
-            steps.append("Signal for immediate transport assistance if water rises rapidly.")
-            warnings.append("Avoid fast-flowing water entirely — 6 inches can knock a person over.")
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(R * c, 2)
+
+def evaluate_safesync(hazard_type, severity, user_profile, shelters, user_lat=16.3067, user_lon=80.4365):
+    severity_weights = {"Low": 25, "Medium": 50, "High": 75, "Critical": 100}
+    sev_score = severity_weights.get(severity, 50)
+    
+    v_score = 0
+    if user_profile['elderly'] > 0: v_score += 25
+    if user_profile['children'] > 0: v_score += 20
+    if user_profile['disabilities'] > 0: v_score += 30
+    if user_profile['mobility'] != 'Normal': v_score += 25
+    
+    vulnerability_level = "Low"
+    if v_score >= 60: vulnerability_level = "High"
+    elif v_score >= 30: vulnerability_level = "Medium"
+    
+    risk_score = min(100, int((sev_score * 0.6) + (v_score * 0.4)))
+    
+    if risk_score >= 75:
+        risk_zone = "Red Zone"
+        zone_color = "red"
+    elif risk_score >= 45:
+        risk_zone = "Warning Zone"
+        zone_color = "orange"
+    else:
+        risk_zone = "Safe Zone"
+        zone_color = "green"
+        
+    if risk_score >= 70 or (severity == "Critical" and vulnerability_level != "Low"):
+        priority = "Immediate Relocation"
+        priority_color = "red"
+    elif risk_score >= 50:
+        priority = "High Priority"
+        priority_color = "orange"
+    elif risk_score >= 30:
+        priority = "Medium Priority"
+        priority_color = "yellow"
+    else:
+        priority = "Low Priority"
+        priority_color = "green"
+        
+    req_cap = user_profile['num_people']
+    best_shelter = None
+    min_dist = float('inf')
+    
+    processed_shelters = []
+    for s in shelters:
+        dist = calculate_distance(user_lat, user_lon, s['lat'], s['lon'])
+        s['distance_km'] = dist
+        
+        if s['available_capacity'] >= req_cap:
+            s['status'] = "Capacity Available"
+        elif s['available_capacity'] > 0:
+            s['status'] = "Capacity Limited"
         else:
-            steps.append("Evacuate immediately to designated high ground or shelter.")
-            steps.append("Assist nearby children, elderly, or mobility-impaired individuals.")
-            warnings.append("Do not walk or drive through flooded roads or submerged bridges.")
+            s['status'] = "Shelter Full"
+            
+        is_suitable = s['available_capacity'] >= req_cap
+        if user_profile['mobility'] != 'Normal' and not s['has_ramp']:
+            is_suitable = False
+            
+        s['suitable'] = is_suitable
+        if is_suitable and dist < min_dist:
+            min_dist = dist
+            best_shelter = s
+            
+        processed_shelters.append(s)
+        
+    if not best_shelter and processed_shelters:
+        best_shelter = sorted(processed_shelters, key=lambda x: x['distance_km'])[0]
 
-    # 2. FIRE
-    elif "Fire" in hazard_type:
-        steps.append("Get down low and crawl under smoke to reach the nearest exit.")
-        steps.append("Touch door handles with the back of your hand before opening; if hot, do not open.")
-        if mobility == "Wheelchair":
-            steps.append("Proceed directly to the designated Accessible Refuge Area and activate SOS.")
-        else:
-            steps.append("Use stairwells only. NEVER use elevators during a fire emergency.")
-        warnings.append("Once outside, stay out. Never re-enter a burning structure for belongings.")
-
-    # 3. GAS LEAK
-    elif "Gas Leak" in hazard_type:
-        steps.append("Evacuate the premises immediately into fresh, outdoor air.")
-        steps.append("Leave doors and windows open behind you if it does not delay exit.")
-        warnings.append("DO NOT flip light switches, light matches, or create any sparks.")
-        warnings.append("Do not operate cell phones inside the leak area.")
-
-    # 4. BUILDING COLLAPSE
-    elif "Building Collapse" in hazard_type:
-        steps.append("If trapped: Cover mouth with a cloth or mask to prevent dust inhalation.")
-        steps.append("Tap on pipes or walls periodically so search teams can hear your location.")
-        steps.append("If mobile: Exit calmly via clear structural corridors, avoiding damaged stairways.")
-        warnings.append("Shout only as a last resort to preserve energy and prevent dust inhalation.")
-
-    # 5. ROAD ACCIDENT
-    elif "Road Accident" in hazard_type:
-        steps.append("Turn off vehicle ignition immediately to prevent fire hazards.")
-        steps.append("Check yourself and passengers for injuries before attempting to move.")
-        steps.append("Move to a safe spot away from traffic and activate hazard lights / SOS.")
-        warnings.append("Do not move critically injured persons unless immediate fire/explosion risk exists.")
-
-    # 6. CYCLONE
-    elif "Cyclone" in hazard_type:
-        steps.append("Remain indoors in an interior room away from glass windows and loose roofing.")
-        steps.append("Disconnect non-essential electrical appliances to protect against power surges.")
-        steps.append("Keep emergency kit, flashlights, and battery-powered radio readily accessible.")
-        warnings.append("Do not be fooled by the 'Eye of the Storm' calm period; winds will resume suddenly.")
-
-    # 7. EARTHQUAKE
-    elif "Earthquake" in hazard_type:
-        if mobility == "Wheelchair":
-            steps.append("Lock wheelchair wheels, cover your head and neck with your arms and a cushion.")
-        else:
-            steps.append("DROP, COVER, and HOLD ON: Get under a sturdy table or desk.")
-        steps.append("Stay indoors until shaking stops completely and it is safe to exit.")
-        warnings.append("Stay away from windows, heavy furniture, hanging lights, and exterior walls.")
-
-    # System Adaptive Constraints
-    if battery_level <= 20:
-        steps.insert(0, "🔋 BATTERY CRITICAL: Screen brightness minimized. Audio guidance prioritized.")
-    if offline_mode:
-        steps.insert(0, "📶 OFFLINE MODE: Using cached offline maps and local emergency protocols.")
-
-    return steps, warnings
+    return {
+        "risk_score": risk_score,
+        "risk_zone": risk_zone,
+        "zone_color": zone_color,
+        "vulnerability_level": vulnerability_level,
+        "relocation_priority": priority,
+        "priority_color": priority_color,
+        "recommended_shelter": best_shelter,
+        "all_shelters": processed_shelters
+    }

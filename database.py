@@ -1,73 +1,90 @@
 import sqlite3
+import math
 
-DB_NAME = "hazard_system.db"
-
-def get_connection():
-    return sqlite3.connect(DB_NAME)
+DB_FILE = "safesync_habitation.db"
 
 def init_db():
-    conn = get_connection()
-    c = conn.cursor()
-    
-    # User Profile Table
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-                    username TEXT PRIMARY KEY, 
-                    password TEXT, 
-                    name TEXT,
-                    age INTEGER, 
-                    num_people INTEGER,
-                    children INTEGER,
-                    elderly INTEGER,
-                    disabilities INTEGER,
-                    mobility TEXT, 
-                    language TEXT)''')
-    
-    # Shelters Table
-    c.execute('''CREATE TABLE IF NOT EXISTS shelters (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    name TEXT,
-                    location TEXT,
-                    lat REAL,
-                    lon REAL,
-                    total_capacity INTEGER,
-                    occupied_capacity INTEGER,
-                    resources TEXT,
-                    has_ramp INTEGER)''')
-    
+    """Initializes SQLite database table for storing habitation profiles."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            location TEXT NOT NULL,
+            vulnerability TEXT,
+            affected_people INTEGER
+        )
+    """)
     conn.commit()
-    
-    # Insert Demo Shelters if empty
-    c.execute("SELECT COUNT(*) FROM shelters")
-    if c.fetchone()[0] == 0:
-        demo_shelters = [
-            ("Central Community Hall", "Guntur North", 16.3150, 80.4420, 200, 150, "Food, Water, Medical, Ramps", 1),
-            ("St. Mary High School", "Guntur West", 16.2980, 80.4210, 150, 145, "Food, Basic First Aid", 0),
-            ("Indoor Sports Complex", "Guntur East", 16.3200, 80.4500, 500, 120, "Food, Water, Power Backup, Beds", 1)
-        ]
-        c.executemany('''INSERT INTO shelters (name, location, lat, lon, total_capacity, occupied_capacity, resources, has_ramp)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)''', demo_shelters)
-        conn.commit()
+    conn.close()
 
-    # Insert Demo User if empty
-    c.execute("SELECT COUNT(*) FROM users WHERE username='ramesh'")
-    if c.fetchone()[0] == 0:
-        c.execute('''INSERT INTO users VALUES ('ramesh', 'pass123', 'Ramesh Kumar', 70, 6, 1, 2, 1, 'Limited Mobility', 'Telugu')''')
-        conn.commit()
+def save_profile_to_db(name, location, vulnerability="Low", affected_people=6):
+    """Saves or updates habitation profile data in SQLite database."""
+    init_db()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM user_profiles")  # Keeps active profile updated
+    cursor.execute("""
+        INSERT INTO user_profiles (name, location, vulnerability, affected_people)
+        VALUES (?, ?, ?, ?)
+    """, (name, location, vulnerability, affected_people))
+    conn.commit()
+    conn.close()
+
+def load_profile_from_db():
+    """Loads the saved profile record from SQLite database."""
+    init_db()
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT name, location, vulnerability, affected_people FROM user_profiles ORDER BY id DESC LIMIT 1")
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return {"name": row[0], "location": row[1], "vulnerability": row[2], "affected_people": row[3]}
+    return {"name": "Ramesh Kumar", "location": "Guntur Central", "vulnerability": "Low", "affected_people": 6}
+
+def calculate_haversine_distance(lat1, lon1, lat2, lon2):
+    """Calculates Haversine distance in kilometers between two geo-coordinates."""
+    R = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(R * c, 2)
+
+def generate_dynamic_shelters(user_lat, user_lon, location_name):
+    """
+    Dynamically generates and locates local relief shelters around the search location.
+    """
+    clean_loc = location_name.split(',')[0].strip()
+    
+    shelter_configs = [
+        {"suffix": "Indoor Sports Complex", "lat_off": 0.008, "lon_off": 0.005, "tot": 500, "occ": 120, "ramp": "Yes"},
+        {"suffix": "Central Community Hall", "lat_off": -0.012, "lon_off": 0.009, "tot": 200, "occ": 150, "ramp": "Yes"},
+        {"suffix": "St. Mary High School", "lat_off": 0.015, "lon_off": -0.011, "tot": 150, "occ": 145, "ramp": "No"},
+        {"suffix": "City Emergency Relief Node", "lat_off": -0.005, "lon_off": -0.007, "tot": 300, "occ": 80, "ramp": "Yes"}
+    ]
+
+    shelter_list = []
+    for s in shelter_configs:
+        s_lat = round(user_lat + s["lat_off"], 4)
+        s_lon = round(user_lon + s["lon_off"], 4)
+        dist = calculate_haversine_distance(user_lat, user_lon, s_lat, s_lon)
+        avail = s["tot"] - s["occ"]
         
-    conn.close()
-
-def get_all_shelters():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT id, name, location, lat, lon, total_capacity, occupied_capacity, resources, has_ramp FROM shelters")
-    rows = c.fetchall()
-    conn.close()
-    
-    shelters = []
-    for r in rows:
-        shelters.append({
-            "id": r[0], "name": r[1], "location": r[2], "lat": r[3], "lon": r[4],
-            "total_capacity": r[5], "occupied_capacity": r[6],
-            "available_capacity": r[5] - r[6], "resources": r[7], "has_ramp": bool(r[8])
+        shelter_list.append({
+            "Shelter Name": f"{clean_loc} {s['suffix']}",
+            "Location": f"{clean_loc} Region",
+            "lat": s_lat,
+            "lon": s_lon,
+            "Total Cap": s["tot"],
+            "Occupied Cap": s["occ"],
+            "Available Cap": avail,
+            "Accessibility Ramp": s["ramp"],
+            "Distance": f"{dist} km",
+            "dist_num": dist
         })
-    return shelters
+
+    # Sort shelters in order of proximity
+    return sorted(shelter_list, key=lambda item: item["dist_num"])
